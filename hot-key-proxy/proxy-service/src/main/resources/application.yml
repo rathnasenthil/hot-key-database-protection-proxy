@@ -1,0 +1,63 @@
+server:
+  port: 8080
+  tomcat:
+    max-connections: 20000
+    accept-count: 1000
+
+spring:
+  application:
+    name: proxy-service
+  threads:
+    virtual:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: proxy-service
+      instance: ${PROXY_INSTANCE_ID:proxy}
+
+proxy:
+  instance-id: ${PROXY_INSTANCE_ID:proxy}
+  origin-base-url: ${PROXY_ORIGIN_BASE_URL:http://localhost:8081}
+  redis-nodes: ${PROXY_REDIS_NODES:localhost:6379}
+  command-timeout: 200ms
+  negative-ttl: 5s
+  ttl-jitter-fraction: 0.1
+  retry-after-seconds: 1
+  policies:
+    product:
+      ttl: 60s
+      stale-window: 30s
+      hot-ttl: 300s
+    reviews:
+      ttl: 30s
+      stale-window: 15s
+      hot-ttl: 120s
+  coalescing:
+    max-wait: 50ms
+  hot-key:
+    threshold: 500
+    window: 5s
+    demote-fraction: 0.5
+  admission:
+    max-origin-concurrency: 20
+    queue-limit: 100
+    queue-wait: 100ms
+    unhealthy-min-samples: 10
+    unhealthy-failure-rate: 0.5
+  hashing:
+    virtual-nodes-per-node: 150
+
+logging:
+  level:
+    com.hotkey: INFO

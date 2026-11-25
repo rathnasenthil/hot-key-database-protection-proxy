@@ -1,0 +1,256 @@
+name: hot-key-proxy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: catalog
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - max_connections=200
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./monitoring/postgres/init.sql:/docker-entrypoint-initdb.d/01-pg-stat.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog -d catalog"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 1g
+    cpus: "1.0"
+    restart: unless-stopped
+
+  redis-1:
+    image: redis:7
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    cpus: "0.50"
+    restart: unless-stopped
+
+  redis-2:
+    image: redis:7
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    ports: ["6380:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    cpus: "0.50"
+    restart: unless-stopped
+
+  redis-3:
+    image: redis:7
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    ports: ["6381:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    cpus: "0.50"
+    restart: unless-stopped
+
+  origin:
+    build: ./origin-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/catalog
+      SPRING_DATASOURCE_USERNAME: catalog
+      SPRING_DATASOURCE_PASSWORD: catalog
+      ORIGIN_POOL_SIZE: "20"
+      SEED_PRODUCTS: ${SEED_PRODUCTS:-100000}
+      SEED_REVIEWS: ${SEED_REVIEWS:-1000000}
+      ORIGIN_EXTRA_DELAY_MS: ${ORIGIN_EXTRA_DELAY_MS:-0}
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 180s
+    mem_limit: 1g
+    cpus: "1.0"
+    restart: unless-stopped
+
+  proxy-1:
+    build: ./proxy-service
+    image: hot-key-proxy/proxy:local
+    environment:
+      PROXY_INSTANCE_ID: proxy-1
+      PROXY_ORIGIN_BASE_URL: http://origin:8080
+      PROXY_REDIS_NODES: redis-1:6379,redis-2:6379,redis-3:6379
+    ports:
+      - "8091:8080"
+    depends_on:
+      origin:
+        condition: service_healthy
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    mem_limit: 768m
+    cpus: "1.0"
+    restart: unless-stopped
+
+  proxy-2:
+    build: ./proxy-service
+    image: hot-key-proxy/proxy:local
+    environment:
+      PROXY_INSTANCE_ID: proxy-2
+      PROXY_ORIGIN_BASE_URL: http://origin:8080
+      PROXY_REDIS_NODES: redis-1:6379,redis-2:6379,redis-3:6379
+    ports:
+      - "8092:8080"
+    depends_on:
+      origin:
+        condition: service_healthy
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    mem_limit: 768m
+    cpus: "1.0"
+    restart: unless-stopped
+
+  proxy-3:
+    build: ./proxy-service
+    image: hot-key-proxy/proxy:local
+    environment:
+      PROXY_INSTANCE_ID: proxy-3
+      PROXY_ORIGIN_BASE_URL: http://origin:8080
+      PROXY_REDIS_NODES: redis-1:6379,redis-2:6379,redis-3:6379
+    ports:
+      - "8093:8080"
+    depends_on:
+      origin:
+        condition: service_healthy
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    mem_limit: 768m
+    cpus: "1.0"
+    restart: unless-stopped
+
+  gateway:
+    build: ./gateway
+    environment:
+      GATEWAY_PROXIES: http://proxy-1:8080,http://proxy-2:8080,http://proxy-3:8080
+      GATEWAY_ORIGIN_BASE_URL: http://origin:8080
+      GATEWAY_SELF_BASE_URL: http://127.0.0.1:8080
+      GATEWAY_PROMETHEUS_URL: http://prometheus:9090
+      GATEWAY_PRODUCT_COUNT: ${SEED_PRODUCTS:-100000}
+    ports:
+      - "8080:8080"
+    depends_on:
+      proxy-1:
+        condition: service_healthy
+      proxy-2:
+        condition: service_healthy
+      proxy-3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    mem_limit: 768m
+    cpus: "1.0"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=6h
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - origin
+      - proxy-1
+      - gateway
+    mem_limit: 512m
+    cpus: "0.50"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    mem_limit: 512m
+    cpus: "0.50"
+    restart: unless-stopped
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://catalog:catalog@postgres:5432/catalog?sslmode=disable
+    volumes:
+      - ./monitoring/postgres/queries.yaml:/queries.yaml:ro
+    command: ["--extend.query-path=/queries.yaml"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 128m
+    cpus: "0.25"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hot-Key Proxy Simulation</title>
+  <style>
+    :root {
+      --ink: #1c1915;
+      --paper: #f4f0e6;
+      --panel: #fffdf8;
+      --line: #d9d0c1;
+      --accent: #b42318;
+      --protected: #0f6e56;
+      --baseline: #9a3412;
+      --muted: #6b645b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    header, main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+    header { padding: 28px 0 8px; }
+    h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.03em; }
+    h2 { font-size: 16px; margin: 0 0 12px; }
+    p { color: var(--muted); line-height: 1.45; }
+    a { color: var(--protected); }
+    .layout { display: grid; grid-template-columns: 320px 1fr; gap: 16px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+    label { display: block; font-size: 13px; margin: 12px 0 6px; }
+    select, input, button { font: inherit; }
+    select, input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: white; }
+    .actions { display: flex; gap: 8px; margin-top: 16px; }
+    button { border: 0; border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+    button.primary { background: var(--ink); color: white; }
+    button.quiet { background: transparent; border: 1px solid var(--line); }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+    .card span { display: block; color: var(--muted); font-size: 12px; }
+    .card strong { display: block; margin-top: 4px; font-size: 22px; }
+    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    canvas { width: 100%; height: 160px; background: #fff; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; }
+    .status { min-height: 1.2em; font-size: 13px; }
+    .note { font-size: 13px; }
+    @media (max-width: 860px) {
+      .layout, .cards, .charts { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Hot-Key Database Protection Proxy</h1>
+    <p>Launch the same workload against the unprotected origin or the protected gateway, then compare database pressure, latency, and cache behavior. Grafana at <a href="http://localhost:3001" target="_blank" rel="noreferrer">localhost:3001</a> keeps the longer Prometheus history.</p>
+  </header>
+  <main>
+    <section class="layout">
+      <form class="panel" id="controls">
+        <h2>Workload</h2>
+        <label for="workload">Scenario</label>
+        <select id="workload">
+          <option value="uniform">W1 Uniform</option>
+          <option value="hotkey">W2 Hot-key spike</option>
+          <option value="moving">W3 Moving hotspot</option>
+          <option value="redis-failure">W4 Redis failure</option>
+          <option value="overload">W5 Overload</option>
+        </select>
+        <label for="mode">Path</label>
+        <select id="mode">
+          <option value="protected">Protected (gateway)</option>
+          <option value="baseline">Baseline (origin only)</option>
+        </select>
+        <label for="duration">Duration (seconds)</label>
+        <input id="duration" type="number" min="5" max="180" value="30">
+        <label for="concurrency">Concurrency</label>
+        <input id="concurrency" type="number" min="1" max="10000" value="200">
+        <div class="actions">
+          <button class="primary" id="start" type="submit">Run</button>
+          <button class="quiet" id="stop" type="button">Stop</button>
+        </div>
+        <p class="status" id="status"></p>
+        <p class="note">W2 with concurrency 10000 is the SRS hot-key target. W3 should run at least 90 seconds so the hot key can move. W4 tells the proxies to bypass Redis mid-run. Stopping the Redis containers is done by <code>benchmarks/w4-redis-failure.ps1</code>.</p>
+      </form>
+      <section>
+        <div class="cards" id="cards"></div>
+        <div class="charts">
+          <div class="panel"><h2>Cache hit ratio</h2><canvas id="hit"></canvas></div>
+          <div class="panel"><h2>Origin queries / s</h2><canvas id="origin"></canvas></div>
+          <div class="panel"><h2>p99 latency (s)</h2><canvas id="latency"></canvas></div>
+          <div class="panel"><h2>DB connections</h2><canvas id="conns"></canvas></div>
+        </div>
+      </section>
+    </section>
+    <section class="panel" style="margin: 16px 0 32px;">
+      <h2>Last completed runs</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Baseline</th>
+            <th>Protected</th>
+          </tr>
+        </thead>
+        <tbody id="compare"></tbody>
+      </table>
+    </section>
+  </main>
+  <script>
+    const history = { hit: [], proxyOrigin: [], originP99: [], proxyP99: [], conns: [] };
+    const maxPoints = 40;
+
+    const cards = [
+      ["originRps", "Origin HTTP rps"],
+      ["proxyOriginRps", "Proxy origin qps"],
+      ["cacheHitRatio", "Cache hit ratio"],
+      ["dbConnections", "DB connections"],
+      ["coalescedRps", "Coalesced rps"],
+      ["rejectedRps", "429 rps"],
+      ["proxyP99", "Protected p99"],
+      ["originP99", "Origin p99"]
+    ];
+
+    function fmt(value, digits = 2) {
+      if (value === null || value === undefined || Number.isNaN(value)) return "—";
+      if (typeof value === "number") return value.toFixed(digits);
+      return String(value);
+    }
+
+    function push(list, value) {
+      list.push(value == null ? null : Number(value));
+      if (list.length > maxPoints) list.shift();
+    }
+
+    function draw(canvas, series) {
+      const ctx = canvas.getContext("2d");
+      const width = canvas.width = canvas.clientWidth * devicePixelRatio;
+      const height = canvas.height = 160 * devicePixelRatio;
+      ctx.clearRect(0, 0, width, height);
+      ctx.strokeStyle = "#d9d0c1";
+      ctx.strokeRect(8, 8, width - 16, height - 16);
+      const lists = Array.isArray(series[0]) ? series : [series];
+      const values = lists.flat().filter(v => v != null && !Number.isNaN(v));
+      const max = Math.max(0.001, ...values);
+      lists.forEach((list, index) => {
+        ctx.beginPath();
+        ctx.lineWidth = 2 * devicePixelRatio;
+        ctx.strokeStyle = index === 0 ? "#0f6e56" : "#9a3412";
+        list.forEach((value, i) => {
+          if (value == null) return;
+          const x = 12 + (i / Math.max(1, maxPoints - 1)) * (width - 24);
+          const y = height - 16 - (value / max) * (height - 32);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      });
+    }
+
+    function renderCards(live) {
+      document.getElementById("cards").innerHTML = cards.map(([key, label]) => {
+        const value = live ? live[key] : null;
+        const digits = key.includes("Ratio") ? 3 : 2;
+        return `<div class="card"><span>${label}</span><strong>${fmt(value, digits)}</strong></div>`;
+      }).join("");
+    }
+
+    function cell(snapshot, key, digits = 2) {
+      if (!snapshot) return "—";
+      return fmt(snapshot[key], digits);
+    }
+
+    function renderCompare(data) {
+      const rows = [
+        ["Workload", "workload", false],
+        ["Requests", "requests", false],
+        ["Success", "success", false],
+        ["HTTP 429", "rejected", false],
+        ["Errors", "errors", false],
+        ["Client p95 (ms)", "clientP95Ms", true],
+        ["Client p99 (ms)", "clientP99Ms", true],
+        ["Hot-key p99 (ms)", "hotP99Ms", true],
+        ["Other-key p99 (ms)", "otherP99Ms", true],
+        ["Peak DB connections", "maxOriginConnections", true],
+        ["Origin queries", "proxyOriginQueries", true],
+        ["Cache hit ratio", "cacheHitRatio", true]
+      ];
+      document.getElementById("compare").innerHTML = rows.map(([label, key, numeric]) => {
+        const base = data.lastBaseline;
+        const prot = data.lastProtected;
+        const left = numeric ? cell(base, key) : (base && base[key] != null ? base[key] : "—");
+        const right = numeric ? cell(prot, key) : (prot && prot[key] != null ? prot[key] : "—");
+        return `<tr><td>${label}</td><td>${left}</td><td>${right}</td></tr>`;
+      }).join("");
+    }
+
+    async function tick() {
+      const response = await fetch("/api/sim/status");
+      const data = await response.json();
+      const live = data.live || {};
+      push(history.hit, live.cacheHitRatio);
+      push(history.proxyOrigin, live.proxyOriginRps);
+      push(history.originP99, live.originP99);
+      push(history.proxyP99, live.proxyP99);
+      push(history.conns, live.dbConnections);
+      renderCards(live);
+      renderCompare(data);
+      draw(document.getElementById("hit"), history.hit);
+      draw(document.getElementById("origin"), history.proxyOrigin);
+      draw(document.getElementById("latency"), [history.proxyP99, history.originP99]);
+      draw(document.getElementById("conns"), history.conns);
+      const current = data.current || {};
+      document.getElementById("status").textContent = data.running
+        ? `Running ${current.workload || ""} on ${current.mode || ""}`
+        : (current.finishedAt ? `Finished ${current.mode || ""} ${current.workload || ""}` : "Idle");
+      document.getElementById("start").disabled = data.running;
+    }
+
+    document.getElementById("controls").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const body = {
+        workload: document.getElementById("workload").value,
+        mode: document.getElementById("mode").value,
+        durationSeconds: Number(document.getElementById("duration").value),
+        concurrency: Number(document.getElementById("concurrency").value)
+      };
+      const response = await fetch("/api/sim/workloads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        document.getElementById("status").textContent = payload.error || "Unable to start";
+      }
+      tick();
+    });
+
+    document.getElementById("stop").addEventListener("click", async () => {
+      await fetch("/api/sim/stop", { method: "POST" });
+      tick();
+    });
+
+    tick();
+    setInterval(tick, 2000);
+  </script>
+</body>
+</html>

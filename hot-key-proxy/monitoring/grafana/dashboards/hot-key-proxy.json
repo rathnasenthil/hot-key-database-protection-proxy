@@ -1,0 +1,101 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum(rate(proxy_origin_queries_total[1m]))", "legendFormat": "protected origin qps", "refId": "A" },
+        { "expr": "sum(rate(http_server_requests_seconds_count{application=\"origin-service\",uri=~\"/api/products.*\"}[1m]))", "legendFormat": "origin http rps", "refId": "B" }
+      ],
+      "title": "Database-facing request rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum(rate(proxy_cache_requests_total{result=~\"hit|stale|coalesced\"}[1m])) / sum(rate(proxy_cache_requests_total{result=~\"hit|stale|coalesced|miss|bypass\"}[1m]))",
+          "legendFormat": "hit ratio",
+          "refId": "A"
+        }
+      ],
+      "title": "Cache hit ratio",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(proxy_request_latency_seconds_bucket[1m])))", "legendFormat": "protected p95", "refId": "A" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(proxy_request_latency_seconds_bucket[1m])))", "legendFormat": "protected p99", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_requests_seconds_bucket{application=\"origin-service\"}[1m])))", "legendFormat": "origin p99", "refId": "C" }
+      ],
+      "title": "Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum(hikaricp_connections_active{application=\"origin-service\"})", "legendFormat": "hikari active", "refId": "A" },
+        { "expr": "sum(pg_stat_activity_count{datname=\"catalog\"})", "legendFormat": "pg_stat_activity", "refId": "B" },
+        { "expr": "sum(proxy_origin_concurrency)", "legendFormat": "proxy origin permits", "refId": "C" }
+      ],
+      "title": "Database connections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum(rate(proxy_coalesced_requests_total[1m]))", "legendFormat": "coalesced", "refId": "A" },
+        { "expr": "sum(rate(proxy_admission_rejections_total[1m]))", "legendFormat": "429", "refId": "B" },
+        { "expr": "sum(rate(proxy_cache_requests_total{result=\"bypass\"}[1m]))", "legendFormat": "redis bypass", "refId": "C" }
+      ],
+      "title": "Coalescing, rejection, and Redis bypass",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum(proxy_hot_keys)", "legendFormat": "promoted keys", "refId": "A" },
+        { "expr": "sum(proxy_redis_nodes_up)", "legendFormat": "redis nodes up", "refId": "B" }
+      ],
+      "title": "Hot keys and Redis nodes",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["hot-key"],
+  "templating": { "list": [] },
+  "time": { "from": "now-15m", "to": "now" },
+  "timezone": "browser",
+  "title": "Hot-Key Proxy Comparison",
+  "uid": "hot-key-proxy",
+  "version": 1
+}

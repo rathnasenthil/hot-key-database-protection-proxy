@@ -1,0 +1,10 @@
+pg_stat_statements_total:
+  query: "SELECT COALESCE(SUM(calls), 0) AS calls, COALESCE(SUM(total_exec_time), 0) AS total_exec_time FROM pg_stat_statements"
+  master: true
+  metrics:
+    - calls:
+        usage: "COUNTER"
+        description: "Total statements recorded by pg_stat_statements"
+    - total_exec_time:
+        usage: "COUNTER"
+        description: "Total statement execution time in milliseconds"
